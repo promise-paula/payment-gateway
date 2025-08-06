@@ -373,3 +373,64 @@
     )
   )
 )
+
+;; Mark expired payments (can be called by anyone for cleanup)
+(define-public (mark-expired-payment (payment-id uint))
+  (let ((payment-data (unwrap! (map-get? payments payment-id) (err ERR_PAYMENT_NOT_FOUND))))
+    (begin
+      (asserts! (is-eq (get status payment-data) "pending")
+        (err ERR_PAYMENT_ALREADY_PROCESSED)
+      )
+      (asserts! (>= stacks-block-height (get expires-at payment-data))
+        (err ERR_PAYMENT_EXPIRED)
+      )
+
+      (ok (map-set payments payment-id (merge payment-data { status: "expired" })))
+    )
+  )
+)
+
+;; Admin functions (only contract owner)
+
+(define-public (set-platform-fee-rate (new-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (asserts! (<= new-rate u1000) (err ERR_INVALID_FEE_RATE)) ;; Max 10%
+    (ok (var-set platform-fee-rate new-rate))
+  )
+)
+
+(define-public (set-min-payment-amount (new-amount uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (ok (var-set min-payment-amount new-amount))
+  )
+)
+
+(define-public (set-payment-expiry-blocks (new-expiry uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (ok (var-set payment-expiry-blocks new-expiry))
+  )
+)
+
+(define-public (deactivate-merchant (merchant principal))
+  (let ((merchant-data (unwrap! (map-get? merchants merchant) (err ERR_MERCHANT_NOT_REGISTERED))))
+    (begin
+      (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+      (ok (map-set merchants merchant (merge merchant-data { is-active: false })))
+    )
+  )
+)
+
+;; Emergency functions
+(define-public (emergency-withdraw
+    (amount uint)
+    (recipient principal)
+  )
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (try! (as-contract (contract-call? SBTC_TOKEN_CONTRACT transfer amount tx-sender recipient none)))
+    (ok true)
+  )
+)
