@@ -86,3 +86,92 @@
 (define-read-only (get-payment-callback (payment-id uint))
   (map-get? payment-callbacks payment-id)
 )
+
+(define-read-only (get-platform-fee-rate)
+  (var-get platform-fee-rate)
+)
+
+(define-read-only (get-min-payment-amount)
+  (var-get min-payment-amount)
+)
+
+(define-read-only (get-payment-expiry-blocks)
+  (var-get payment-expiry-blocks)
+)
+
+(define-read-only (calculate-fee
+    (amount uint)
+    (merchant principal)
+  )
+  (let (
+      (merchant-info (unwrap! (map-get? merchants merchant) (err ERR_MERCHANT_NOT_REGISTERED)))
+      (fee-rate (get fee-rate merchant-info))
+      (effective-rate (if (> fee-rate u0)
+        fee-rate
+        (var-get platform-fee-rate)
+      ))
+    )
+    (ok (/ (* amount effective-rate) u10000))
+  )
+)
+
+(define-read-only (is-merchant-authorized
+    (merchant principal)
+    (delegate principal)
+  )
+  (or
+    (is-eq merchant delegate)
+    (default-to false
+      (map-get? merchant-authorizations {
+        merchant: merchant,
+        delegate: delegate,
+      })
+    )
+  )
+)
+
+(define-read-only (get-payment-status (payment-id uint))
+  (match (map-get? payments payment-id)
+    payment-data (ok (get status payment-data))
+    (err ERR_PAYMENT_NOT_FOUND)
+  )
+)
+
+(define-read-only (is-payment-expired (payment-id uint))
+  (match (map-get? payments payment-id)
+    payment-data (let ((expires-at (get expires-at payment-data)))
+      (ok (>= stacks-block-height expires-at))
+    )
+    (err ERR_PAYMENT_NOT_FOUND)
+  )
+)
+
+;; Private functions
+
+(define-private (update-merchant-stats
+    (merchant principal)
+    (amount uint)
+  )
+  (match (map-get? merchants merchant)
+    merchant-data (map-set merchants merchant
+      (merge merchant-data {
+        total-volume: (+ (get total-volume merchant-data) amount),
+        payment-count: (+ (get payment-count merchant-data) u1),
+      })
+    )
+    false
+  )
+)
+
+;; Public functions
+
+;; Register a new merchant
+(define-public (register-merchant
+    (business-name (string-ascii 100))
+    (webhook-url (optional (string-ascii 200)))
+    (custom-fee-rate uint)
+  )
+  (begin
+    (asserts! (<= custom-fee-rate u1000) (err ERR_INVALID_FEE_RATE)) ;; Max 10% fee
+    (ok (map-set merchants tx-sender {
+      is-active: true,
