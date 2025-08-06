@@ -175,3 +175,91 @@
     (asserts! (<= custom-fee-rate u1000) (err ERR_INVALID_FEE_RATE)) ;; Max 10% fee
     (ok (map-set merchants tx-sender {
       is-active: true,
+      business-name: business-name,
+      webhook-url: webhook-url,
+      fee-rate: custom-fee-rate,
+      total-volume: u0,
+      payment-count: u0,
+      created-at: stacks-block-height,
+    }))
+  )
+)
+
+;; Update merchant settings
+(define-public (update-merchant-settings
+    (business-name (optional (string-ascii 100)))
+    (webhook-url (optional (string-ascii 200)))
+    (custom-fee-rate (optional uint))
+  )
+  (let ((current-merchant (unwrap! (map-get? merchants tx-sender) (err ERR_MERCHANT_NOT_REGISTERED))))
+    (begin
+      (if (is-some custom-fee-rate)
+        (asserts! (<= (unwrap-panic custom-fee-rate) u1000)
+          (err ERR_INVALID_FEE_RATE)
+        )
+        true
+      )
+      (ok (map-set merchants tx-sender
+        (merge current-merchant {
+          business-name: (default-to (get business-name current-merchant) business-name),
+          webhook-url: (if (is-some webhook-url)
+            webhook-url
+            (get webhook-url current-merchant)
+          ),
+          fee-rate: (default-to (get fee-rate current-merchant) custom-fee-rate),
+        })
+      ))
+    )
+  )
+)
+
+;; Authorize a delegate to act on behalf of merchant
+(define-public (authorize-delegate (delegate principal))
+  (begin
+    (asserts! (is-some (map-get? merchants tx-sender))
+      (err ERR_MERCHANT_NOT_REGISTERED)
+    )
+    (ok (map-set merchant-authorizations {
+      merchant: tx-sender,
+      delegate: delegate,
+    }
+      true
+    ))
+  )
+)
+
+;; Revoke delegate authorization
+(define-public (revoke-delegate (delegate principal))
+  (begin
+    (asserts! (is-some (map-get? merchants tx-sender))
+      (err ERR_MERCHANT_NOT_REGISTERED)
+    )
+    (ok (map-delete merchant-authorizations {
+      merchant: tx-sender,
+      delegate: delegate,
+    }))
+  )
+)
+
+;; Create a new payment request
+(define-public (create-payment-request
+    (amount uint)
+    (description (string-ascii 200))
+    (external-id (optional (string-ascii 100)))
+    (callback-url (optional (string-ascii 200)))
+    (callback-data (optional (string-ascii 500)))
+  )
+  (let (
+      (payment-id (+ (var-get payment-counter) u1))
+      (merchant-info (unwrap! (map-get? merchants tx-sender) (err ERR_MERCHANT_NOT_REGISTERED)))
+      (fee-amount (unwrap! (calculate-fee amount tx-sender) (err ERR_INVALID_AMOUNT)))
+      (expires-at (+ stacks-block-height (var-get payment-expiry-blocks)))
+    )
+    (begin
+      (asserts! (get is-active merchant-info) (err ERR_INVALID_MERCHANT))
+      (asserts! (>= amount (var-get min-payment-amount)) (err ERR_INVALID_AMOUNT))
+
+      ;; Update payment counter
+      (var-set payment-counter payment-id)
+
+      ;; Create payment record
