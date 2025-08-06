@@ -263,3 +263,113 @@
       (var-set payment-counter payment-id)
 
       ;; Create payment record
+      (map-set payments payment-id {
+        payment-id: payment-id,
+        merchant: tx-sender,
+        customer: none,
+        amount: amount,
+        fee-amount: fee-amount,
+        status: "pending",
+        description: description,
+        external-id: external-id,
+        created-at: stacks-block-height,
+        expires-at: expires-at,
+        completed-at: none,
+        refunded-at: none,
+      })
+
+      ;; Store callback information if provided
+      (if (or (is-some callback-url) (is-some callback-data))
+        (map-set payment-callbacks payment-id {
+          callback-url: callback-url,
+          callback-data: callback-data,
+        })
+        true
+      )
+
+      (ok payment-id)
+    )
+  )
+)
+
+;; Process a payment (customer pays)
+(define-public (process-payment (payment-id uint))
+  (let (
+      (payment-data (unwrap! (map-get? payments payment-id) (err ERR_PAYMENT_NOT_FOUND)))
+      (merchant (get merchant payment-data))
+      (amount (get amount payment-data))
+      (fee-amount (get fee-amount payment-data))
+      (net-amount (- amount fee-amount))
+    )
+    (begin
+      ;; Validate payment state
+      (asserts! (is-eq (get status payment-data) "pending")
+        (err ERR_PAYMENT_ALREADY_PROCESSED)
+      )
+      (asserts! (< stacks-block-height (get expires-at payment-data))
+        (err ERR_PAYMENT_EXPIRED)
+      )
+
+      ;; Transfer net amount from customer to merchant
+      (try! (contract-call? SBTC_TOKEN_CONTRACT transfer net-amount tx-sender merchant
+        none
+      ))
+
+      ;; Transfer fee to contract owner if fee > 0
+      (if (> fee-amount u0)
+        (unwrap-panic (contract-call? SBTC_TOKEN_CONTRACT transfer fee-amount tx-sender
+          CONTRACT_OWNER none
+        ))
+        true
+      )
+
+      ;; Update payment status
+      (map-set payments payment-id
+        (merge payment-data {
+          customer: (some tx-sender),
+          status: "completed",
+          completed-at: (some stacks-block-height),
+        })
+      )
+
+      ;; Update merchant statistics
+      (update-merchant-stats merchant amount)
+
+      (ok true)
+    )
+  )
+)
+
+;; Refund a payment (merchant initiates)
+(define-public (refund-payment (payment-id uint))
+  (let (
+      (payment-data (unwrap! (map-get? payments payment-id) (err ERR_PAYMENT_NOT_FOUND)))
+      (merchant (get merchant payment-data))
+      (customer (unwrap! (get customer payment-data) (err ERR_PAYMENT_NOT_FOUND)))
+      (amount (get amount payment-data))
+      (fee-amount (get fee-amount payment-data))
+    )
+    (begin
+      ;; Validate authorization
+      (asserts! (is-merchant-authorized merchant tx-sender)
+        (err ERR_UNAUTHORIZED)
+      )
+      (asserts! (is-eq (get status payment-data) "completed")
+        (err ERR_PAYMENT_ALREADY_PROCESSED)
+      )
+
+      ;; Transfer amount back to customer
+      (try! (contract-call? SBTC_TOKEN_CONTRACT transfer amount merchant customer none))
+
+      ;; Update payment status
+      (map-set payments payment-id
+        (merge payment-data {
+          status: "refunded",
+          refunded-at: (some stacks-block-height),
+        })
+      )
+
+      (ok true)
+    )
+  )
+)
