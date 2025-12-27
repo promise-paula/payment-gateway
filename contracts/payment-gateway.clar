@@ -310,17 +310,16 @@
         (err ERR_PAYMENT_EXPIRED)
       )
 
-      ;; Transfer net amount from customer to merchant
-      (try! (contract-call? SBTC_TOKEN_CONTRACT transfer net-amount tx-sender merchant
-        none
-      ))
+      ;; Transfer full amount from customer to merchant first
+      (unwrap! (contract-call? SBTC_TOKEN_CONTRACT transfer amount tx-sender merchant none)
+        (err ERR_INSUFFICIENT_AMOUNT)
+      )
 
-      ;; Transfer fee to contract owner if fee > 0
-      (if (> fee-amount u0)
-        (unwrap-panic (contract-call? SBTC_TOKEN_CONTRACT transfer fee-amount tx-sender
-          CONTRACT_OWNER none
-        ))
-        true
+      ;; Transfer fee from merchant to contract owner if fee > 0
+      (and (> fee-amount u0)
+        (unwrap! (as-contract (contract-call? SBTC_TOKEN_CONTRACT transfer fee-amount merchant CONTRACT_OWNER none))
+          (err ERR_INSUFFICIENT_AMOUNT)
+        )
       )
 
       ;; Update payment status
@@ -359,7 +358,9 @@
       )
 
       ;; Transfer amount back to customer
-      (try! (contract-call? SBTC_TOKEN_CONTRACT transfer amount merchant customer none))
+      (unwrap! (contract-call? SBTC_TOKEN_CONTRACT transfer amount merchant customer none)
+        (err ERR_REFUND_FAILED)
+      )
 
       ;; Update payment status
       (map-set payments payment-id
@@ -430,7 +431,9 @@
   )
   (begin
     (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
-    (try! (as-contract (contract-call? SBTC_TOKEN_CONTRACT transfer amount tx-sender recipient none)))
+    (unwrap! (as-contract (contract-call? SBTC_TOKEN_CONTRACT transfer amount tx-sender recipient none))
+      (err ERR_INSUFFICIENT_AMOUNT)
+    )
     (ok true)
   )
 )
