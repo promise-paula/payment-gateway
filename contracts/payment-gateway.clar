@@ -16,7 +16,7 @@
 (define-constant ERR_INVALID_FEE_RATE (err u109))
 
 ;; sBTC token reference
-(define-constant SBTC_TOKEN_CONTRACT 'ST1F7QA2MDF17S807EPA36TSS8AMEFY4KA9TVGWXT.sbtc-token)
+(define-constant SBTC_TOKEN_CONTRACT 'SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token)
 
 ;; Data Variables
 (define-data-var payment-counter uint u0)
